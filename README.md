@@ -1,17 +1,36 @@
-# pest_detector
+# PestGuard
 
-A new Flutter project.
+PestGuard is a Flutter app for preparing crop photos for pest review. It includes
+a crop-monitoring dashboard, camera and gallery image selection, scan guidance,
+an activity-history view, and app settings.
 
-## Getting Started
+## Run locally
 
-This project is a starting point for a Flutter application.
+```shell
+flutter pub get
+flutter run
+```
 
-A few resources to get you started if this is your first Flutter project:
+Run the automated checks with:
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```shell
+flutter analyze
+flutter test
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Current capabilities
+
+- Select a crop photo from the gallery or take a new photo.
+- Preview the selected image and check that it can be read.
+- Browse the dashboard, scan workspace, history, and settings.
+- Use the matching PestGuard display name and theme across app platforms.
+
+AI pest identification and scan-history persistence are not implemented yet.
+The app clearly labels AI analysis as unavailable until a model service is
+connected; it does not display placeholder detection results.
+
+## Store release checklist
+
+Before publishing, connect and test the pest-detection service, implement
+persistent scan history, configure a production application identifier and
+release signing, and provide store listing assets and privacy information.

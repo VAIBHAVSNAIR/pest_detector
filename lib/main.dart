@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
 
 void main() {
   runApp(const PestGuardApp());
@@ -76,7 +78,8 @@ class _MainShellState extends State<MainShell> {
   XFile? _selectedImage;
   final ImagePicker _picker = ImagePicker();
   bool _isPreparing = false;
-  String _scanMessage = 'Choose a crop image to prepare a scan.';
+  String _scanMessage = 'Choose a crop image to run AI detection.';
+  String? _resultText;
   final List<ScanRecord> _history = [];
 
   Future<void> _pickImage(ImageSource source) async {
@@ -89,8 +92,8 @@ class _MainShellState extends State<MainShell> {
       if (image == null || !mounted) return;
       setState(() {
         _selectedImage = image;
-        _scanMessage =
-            'Image selected. AI identification is not available yet.';
+        _resultText = null;
+        _scanMessage = 'Image selected. Ready for Roboflow analysis.';
         _selectedIndex = 1;
       });
     } on Exception catch (error) {
@@ -106,40 +109,78 @@ class _MainShellState extends State<MainShell> {
       _showMessage('Select an image first.');
       return;
     }
+
     setState(() {
       _isPreparing = true;
-      _scanMessage = 'Checking the selected image...';
+      _resultText = null;
+      _scanMessage = 'Uploading image to PestGuard AI...';
     });
+
     try {
-      final imageSize = await image.length();
-      if (!mounted) return;
-      if (imageSize == 0) {
-        setState(() {
-          _isPreparing = false;
-          _scanMessage =
-              'This image is empty. Choose another photo to continue.';
-        });
-        _showMessage('The selected image is empty. Please choose another.');
-        return;
+      final bytes = await image.readAsBytes();
+      if (bytes.isEmpty) {
+        throw Exception('The selected image is empty.');
       }
-      setState(() {
-        _isPreparing = false;
-        _scanMessage =
-            'Image is ready. AI analysis will be available when a model is connected.';
-      });
-      _showMessage(
-        'Image checked and ready. AI analysis is not connected yet.',
+
+      final uri = Uri.parse('http://127.0.0.1:5000/detect');
+      final request = http.MultipartRequest('POST', uri);
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          bytes,
+          filename: image.name.isEmpty ? 'crop_image.jpg' : image.name,
+        ),
       );
-    } on Exception catch (error) {
-      debugPrint('Image preparation failed: $error');
+
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 120),
+      );
+      final response = await http.Response.fromStream(streamedResponse);
+
+      Map<String, dynamic> body;
+      try {
+        body = jsonDecode(response.body) as Map<String, dynamic>;
+      } catch (_) {
+        throw Exception('Backend returned an unreadable response.');
+      }
+
+      if (response.statusCode < 200 ||
+          response.statusCode >= 300 ||
+          body['success'] != true) {
+        throw Exception(
+          body['error']?.toString() ??
+              'Detection failed (HTTP ${response.statusCode}).',
+        );
+      }
+
+      final result = body['result'];
+      final formattedResult = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(result);
+
       if (!mounted) return;
       setState(() {
         _isPreparing = false;
-        _scanMessage = 'The image could not be read. Please choose it again.';
+        _scanMessage = 'Roboflow analysis completed successfully.';
+        _resultText = formattedResult;
+        _history.insert(
+          0,
+          ScanRecord(
+            title: 'Pest detection',
+            date: DateTime.now(),
+            status: 'Analysis completed',
+          ),
+        );
       });
-      _showMessage(
-        'Could not read the selected image. Please choose it again.',
-      );
+      _showMessage('AI analysis completed.');
+    } catch (error) {
+      debugPrint('Roboflow scan failed: $error');
+      if (!mounted) return;
+      setState(() {
+        _isPreparing = false;
+        _scanMessage = 'Could not complete AI analysis: $error';
+      });
+      _showMessage('AI analysis failed. Check that the backend is running.');
     }
   }
 
@@ -152,7 +193,8 @@ class _MainShellState extends State<MainShell> {
   void _clearImage() {
     setState(() {
       _selectedImage = null;
-      _scanMessage = 'Choose a crop image to prepare a scan.';
+      _resultText = null;
+      _scanMessage = 'Choose a crop image to run AI detection.';
     });
   }
 
@@ -169,6 +211,7 @@ class _MainShellState extends State<MainShell> {
         image: _selectedImage,
         isPreparing: _isPreparing,
         message: _scanMessage,
+        resultText: _resultText,
         onGallery: () => _pickImage(ImageSource.gallery),
         onCamera: () => _pickImage(ImageSource.camera),
         onPrepare: _prepareScan,
@@ -720,7 +763,7 @@ class _InfoBanner extends StatelessWidget {
           SizedBox(width: 10),
           Expanded(
             child: Text(
-              'AI analysis is not connected yet. Image selection and the app interface are ready; model integration will be added separately.',
+              'Upload a crop or insect image and run it through the connected Roboflow backend.',
               style: TextStyle(
                 color: Color(0xFF79551E),
                 fontSize: 12,
@@ -795,6 +838,7 @@ class ScanPage extends StatelessWidget {
     required this.image,
     required this.isPreparing,
     required this.message,
+    required this.resultText,
     required this.onGallery,
     required this.onCamera,
     required this.onPrepare,
@@ -804,6 +848,7 @@ class ScanPage extends StatelessWidget {
   final XFile? image;
   final bool isPreparing;
   final String message;
+  final String? resultText;
   final VoidCallback onGallery;
   final VoidCallback onCamera;
   final VoidCallback onPrepare;
@@ -897,7 +942,9 @@ class ScanPage extends StatelessWidget {
                               )
                             : const Icon(Icons.auto_awesome_rounded),
                         label: Text(
-                          isPreparing ? 'Checking image...' : 'Check image',
+                          isPreparing
+                              ? 'Analysing image...'
+                              : 'Run AI detection',
                         ),
                         style: FilledButton.styleFrom(
                           backgroundColor: AppColors.forest,
@@ -910,6 +957,10 @@ class ScanPage extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               _StatusCard(message: message),
+              if (resultText != null) ...[
+                const SizedBox(height: 16),
+                _DetectionResultCard(resultText: resultText!),
+              ],
               const SizedBox(height: 16),
               const _GuidanceCard(),
             ]),
@@ -1004,6 +1055,54 @@ class _ImageLoadError extends StatelessWidget {
           Text(
             'This image could not be displayed.',
             style: TextStyle(color: AppColors.forest),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetectionResultCard extends StatelessWidget {
+  const _DetectionResultCard({required this.resultText});
+
+  final String resultText;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.verified_outlined, color: AppColors.green),
+              SizedBox(width: 8),
+              Text(
+                'Roboflow response',
+                style: TextStyle(
+                  color: AppColors.forest,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SelectableText(
+            resultText,
+            style: const TextStyle(
+              color: AppColors.ink,
+              fontSize: 11,
+              height: 1.45,
+              fontFamily: 'monospace',
+            ),
           ),
         ],
       ),
